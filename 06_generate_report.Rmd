@@ -1,0 +1,334 @@
+---
+title: "Medulloblastoma Liquid Biopsy Report"
+subtitle: "CSF cfDNA Analysis"
+output: 
+  pdf_document:
+    toc: false
+params:
+  sample_id: "MB001"
+  classification_file: "classification.csv"
+  risk_file: "risk.csv"
+  ichorcna_dir: "ichorcna/"
+  seg_file: "segs.txt"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+library(data.table)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+```
+
+# EXECUTIVE SUMMARY
+
+```{r load_data}
+class_data <- fread(params$classification_file)
+risk_data <- fread(params$risk_file)
+seg_data <- fread(params$seg_file)
+```
+
+**Patient Sample:** `r params$sample_id`  
+**Report Date:** `r format(Sys.Date(), "%B %d, %Y")`  
+**Analysis:** CSF Cell-Free DNA (Low-Coverage WGS)
+
+---
+
+## Primary Findings
+
+**Medulloblastoma Subgroup:** **`r class_data$MB_Subgroup`**
+
+**Classification Confidence:** `r class_data$Confidence`
+
+**Risk Stratification:** `r risk_data$Risk_Group`
+
+**Expected 5-Year PFS:** `r risk_data$PFS_5year`
+
+**Tumor Fraction (CSF):** `r round(class_data$Tumor_Fraction * 100, 2)`%
+
+---
+
+# MOLECULAR CLASSIFICATION
+
+## Subgroup Assignment
+
+Based on copy number alteration patterns detected in cerebrospinal fluid cell-free DNA, this sample is classified as **`r class_data$MB_Subgroup` medulloblastoma**.
+
+```{r subgroup_scores}
+scores <- data.frame(
+  Subgroup = c("WNT", "SHH", "Group 3", "Group 4"),
+  Score = c(class_data$WNT_Score, class_data$SHH_Score, 
+            class_data$Group3_Score, class_data$Group4_Score)
+)
+
+ggplot(scores, aes(x=reorder(Subgroup, -Score), y=Score, fill=Subgroup)) +
+  geom_bar(stat="identity") +
+  geom_text(aes(label=Score), vjust=-0.5) +
+  scale_fill_manual(values=c("WNT"="#2E7D32", "SHH"="#1976D2", 
+                             "Group 3"="#C62828", "Group 4"="#F57C00")) +
+  labs(title="Subgroup Classification Scores",
+       x="MB Subgroup", y="Score") +
+  theme_minimal() +
+  theme(legend.position="none")
+```
+
+### Detected Molecular Features
+
+```{r features_table}
+features <- data.frame(
+  Feature = character(),
+  Status = character(),
+  Clinical_Significance = character()
+)
+
+if (class_data$Monosomy_6) {
+  features <- rbind(features, data.frame(
+    Feature = "Monosomy 6",
+    Status = "PRESENT",
+    Clinical_Significance = "Diagnostic for WNT subgroup"
+  ))
+}
+
+if (class_data$Iso17q) {
+  features <- rbind(features, data.frame(
+    Feature = "Isochromosome 17q",
+    Status = "PRESENT",
+    Clinical_Significance = "Common in Group 3/4"
+  ))
+}
+
+if (class_data$MYC_amp) {
+  features <- rbind(features, data.frame(
+    Feature = "MYC amplification",
+    Status = "PRESENT",
+    Clinical_Significance = "HIGH RISK - Group 3 marker"
+  ))
+}
+
+if (class_data$MYCN_amp) {
+  features <- rbind(features, data.frame(
+    Feature = "MYCN amplification",
+    Status = "PRESENT",
+    Clinical_Significance = "High risk - SHH/Group 4"
+  ))
+}
+
+if (class_data$Chr8_loss) {
+  features <- rbind(features, data.frame(
+    Feature = "Chromosome 8 loss",
+    Status = "PRESENT",
+    Clinical_Significance = "Suggests Group 4"
+  ))
+}
+
+if (nrow(features) > 0) {
+  kable(features, caption="Key Molecular Alterations")
+} else {
+  cat("No high-confidence molecular features detected.\n")
+  cat("This may indicate low tumor fraction or inconclusive pattern.\n")
+}
+```
+
+---
+
+# RISK STRATIFICATION
+
+**Risk Group:** `r risk_data$Risk_Group`
+
+**Clinical Interpretation:**  
+`r risk_data$Rationale`
+
+**Expected Outcome:**  
+5-Year Progression-Free Survival: `r risk_data$PFS_5year`
+
+### Risk Modifiers
+
+```{r risk_modifiers}
+risk_mods <- data.frame(
+  Modifier = c("MYC amplification", "MYCN amplification", 
+               "Chromosome 13 loss", "Metastasis at diagnosis",
+               "Residual disease post-surgery"),
+  Present = c(
+    ifelse(risk_data$MYC_amplification, "YES", "No"),
+    ifelse(risk_data$MYCN_amplification, "YES", "No"),
+    ifelse(risk_data$Chr13_loss, "YES (protective)", "No"),
+    ifelse(risk_data$Metastasis, "YES", "Unknown"),
+    ifelse(risk_data$Residual_disease, "YES", "Unknown")
+  ),
+  Impact = c("Adverse", "Adverse", "Protective", "Adverse", "Adverse")
+)
+
+kable(risk_mods, caption="Risk Modifiers")
+```
+
+---
+
+# COPY NUMBER PROFILE
+
+```{r cnv_plot, fig.width=10, fig.height=4}
+# Prepare genome-wide CNV plot
+seg_data$chr_num <- as.numeric(gsub("X", "23", seg_data$chr))
+seg_data <- seg_data[order(seg_data$chr_num, seg_data$start)]
+
+# Chromosome positions
+chr_info <- seg_data[, .(max_pos=max(end)), by=chr_num]
+chr_info <- chr_info[order(chr_info$chr_num)]
+chr_info$cum_pos <- cumsum(as.numeric(chr_info$max_pos))
+chr_info$start_pos <- c(0, chr_info$cum_pos[-nrow(chr_info)])
+
+seg_data <- merge(seg_data, chr_info[, .(chr_num, start_pos)], by="chr_num")
+seg_data$plot_start <- seg_data$start_pos + seg_data$start
+seg_data$plot_end <- seg_data$start_pos + seg_data$end
+seg_data$plot_mid <- (seg_data$plot_start + seg_data$plot_end) / 2
+
+ggplot(seg_data, aes(x=plot_mid, y=copy.number)) +
+  geom_segment(aes(x=plot_start, xend=plot_end,
+                   y=copy.number, yend=copy.number,
+                   color=copy.number), size=2) +
+  geom_hline(yintercept=2, linetype="dashed", color="gray40") +
+  geom_hline(yintercept=c(1, 3), linetype="dotted", color="gray60") +
+  scale_color_gradient2(low="blue", mid="gray80", high="red",
+                       midpoint=2, name="Copy\nNumber") +
+  scale_x_continuous(breaks=chr_info$start_pos + chr_info$max_pos/2,
+                     labels=chr_info$chr_num) +
+  scale_y_continuous(limits=c(0, max(5, max(seg_data$copy.number, na.rm=TRUE)))) +
+  labs(title="Genome-Wide Copy Number Profile",
+       x="Chromosome", y="Copy Number") +
+  theme_minimal() +
+  theme(panel.grid.minor=element_blank())
+```
+
+---
+
+# QUALITY METRICS
+
+```{r qc_table}
+qc <- data.frame(
+  Metric = c("Tumor Fraction", "Ploidy", "Classification Confidence", 
+             "Number of CNV Segments"),
+  Value = c(
+    paste0(round(class_data$Tumor_Fraction * 100, 2), "%"),
+    as.character(class_data$Ploidy),
+    class_data$Confidence,
+    nrow(seg_data)
+  ),
+  Status = c(
+    ifelse(class_data$Tumor_Fraction >= 0.08, "PASS", "LOW"),
+    "N/A",
+    class_data$Confidence,
+    "N/A"
+  )
+)
+
+kable(qc, caption="Quality Control Metrics")
+```
+
+```{r qc_warning}
+if (class_data$Tumor_Fraction < 0.08) {
+  cat("\n**QUALITY ALERT:** Tumor fraction below recommended threshold (8%).\n")
+  cat("Classification confidence may be reduced. Consider:\n")
+  cat("- Repeat CSF sampling if clinically indicated\n")
+  cat("- Correlation with tissue-based molecular testing\n")
+  cat("- Serial monitoring to track tumor burden\n")
+}
+```
+
+---
+
+# CLINICAL INTERPRETATION
+
+## Subgroup-Specific Considerations
+
+```{r clinical_interp}
+if (class_data$MB_Subgroup == "WNT") {
+  cat("**WNT-activated medulloblastoma** has excellent prognosis (>90% 5-year survival).\n\n")
+  cat("**Treatment Implications:**\n")
+  cat("- Consider reduced-intensity therapy to minimize late effects\n")
+  cat("- Gross total resection may not be necessary (survival excellent regardless)\n")
+  cat("- Conservative surgical approach to reduce posterior fossa syndrome risk\n")
+  cat("- Reduced craniospinal radiation dose may be appropriate\n")
+  
+} else if (class_data$MB_Subgroup == "SHH") {
+  cat("**SHH-activated medulloblastoma** has variable prognosis depending on TP53 status.\n\n")
+  cat("**Treatment Implications:**\n")
+  cat("- Consider SMO inhibitors (vismodegib/sonidegib) for recurrent disease\n")
+  cat("- TP53 mutation testing recommended for definitive risk stratification\n")
+  cat("- MYCN amplification indicates poor prognosis\n")
+  
+} else if (class_data$MB_Subgroup == "Group3") {
+  cat("**Group 3 medulloblastoma** has poor prognosis (<50% 5-year survival).\n\n")
+  cat("**Treatment Implications:**\n")
+  cat("- Aggressive multimodal therapy indicated\n")
+  cat("- MYC amplification is very high risk - consider treatment intensification\n")
+  cat("- Close surveillance for metastatic disease\n")
+  cat("- Consider clinical trial enrollment\n")
+  
+} else if (class_data$MB_Subgroup == "Group4") {
+  cat("**Group 4 medulloblastoma** has intermediate prognosis (~75% 5-year survival).\n\n")
+  cat("**Treatment Implications:**\n")
+  cat("- Standard risk-adapted therapy\n")
+  cat("- Maximal safe resection improves PFS\n")
+  cat("- Chromosome 13 loss is protective (if present)\n")
+  cat("- MYCN amplification indicates higher risk\n")
+}
+```
+
+---
+
+# METHODS
+
+**Sample Type:** Cerebrospinal fluid (CSF) cell-free DNA
+
+**Collection:** During external ventricular drain (EVD) placement
+
+**Sequencing:** Low-coverage whole genome sequencing (~0.5-1× coverage)
+
+**Analysis Pipeline:**
+1. Preprocessing: BWA-MEM alignment, quality control
+2. CNV Detection: ichorCNA (tumor fraction estimation + copy number calling)
+3. Subgroup Classification: CNV signature matching (WNT, SHH, Group 3, Group 4)
+4. Risk Stratification: Schwalbe et al. 2017 criteria
+
+**Reference Publications:**
+- Liu et al. 2021, Cancer Cell (lcWGS for MB monitoring)
+- Markowitz et al. 2025, NPJ Precision Oncology (Fragmentomics classification)
+- Escudero et al. 2020, Nature Communications (CSF ctDNA subtyping)
+- Schwalbe et al. 2017, Lancet Oncology (Risk stratification)
+
+---
+
+# LIMITATIONS AND DISCLAIMERS
+
+1. **This is a research-use analysis** based on published methodologies. Results should be interpreted in conjunction with:
+   - Histopathology
+   - MRI imaging
+   - Clinical presentation
+   - Tissue-based molecular testing (methylation profiling preferred)
+
+2. **Low tumor fraction** (<8%) may reduce classification accuracy
+
+3. **CNV-based classification** does not detect:
+   - Point mutations (e.g., TP53, CTNNB1)
+   - Methylation patterns
+   - Gene expression signatures
+
+4. **Recommended confirmatory testing:**
+   - Tissue-based DNA methylation profiling (gold standard)
+   - Targeted sequencing for TP53, CTNNB1, and other driver mutations
+   - Immunohistochemistry for subgroup markers
+
+5. **Serial monitoring** with this assay may provide additional clinical value for:
+   - Minimal residual disease detection
+   - Early relapse prediction (3+ month lead time demonstrated)
+   - Treatment response assessment
+
+---
+
+**Report Generated:** `r Sys.time()`  
+**Pipeline Version:** MB-Classifier v1.0  
+**Based on:** Liu 2021, Markowitz 2025, Escudero 2020
+
+---
+
+**For Clinical Questions Contact:**  
+[Your Hospital Molecular Diagnostics Laboratory]
