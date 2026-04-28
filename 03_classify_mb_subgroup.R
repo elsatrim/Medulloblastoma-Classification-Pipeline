@@ -1,40 +1,241 @@
 #!/usr/bin/env Rscript
-# Classify MB into subgroups (WNT, SHH, Group 3, Group 4)
-# Based on Escudero 2020, Liu 2021, Schwalbe 2017
+# Classify MB using SIMPLE PRESENCE/ABSENCE logic
+# Based on Liu et al. 2021 approach
 
 suppressPackageStartupMessages({
   library(optparse)
   library(data.table)
-  library(yaml)
 })
 
 option_list <- list(
   make_option(c("-i", "--id"), type="character", help="Sample ID"),
   make_option(c("-s", "--seg"), type="character", help="ichorCNA seg file"),
   make_option(c("-p", "--params"), type="character", help="ichorCNA params file"),
-  make_option(c("-c", "--config"), type="character", help="MB CNV signatures config"),
   make_option(c("-o", "--output"), type="character", help="Output directory")
 )
 
 opt <- parse_args(OptionParser(option_list=option_list))
 
-cat("=== MB Subgroup Classification ===\n")
-cat("Sample:", opt$id, "\n\n")
+cat("=== MB Subgroup Classification (Liu 2021 Method) ===\n")
 
 # Load data
 seg_data <- fread(opt$seg)
 params <- fread(opt$params)
-config <- read_yaml(opt$config)
 
 tumor_fraction <- params$Tumor_Fraction[1]
 ploidy <- params$Ploidy[1]
 
-cat("Tumor Fraction:", round(tumor_fraction * 100, 2), "%\n")
-cat("Ploidy:", ploidy, "\n\n")
+cat("Sample:", opt$id, "\n")
+cat("Tumor Fraction:", round(tumor_fraction * 100, 2), "%\n\n")
 
-# ============================================
-# MB SUBGROUP CLASSIFICATION FUNCTION
-# Based on CNV signatures from published papers
+# ==========================================
+# FEATURE DETECTION FUNCTIONS
+# Based on Escudero 2020 + Schwalbe 2017
+# ==========================================
+
+get_chr_cn <- function(chr, arm = NULL) {
+  chr_segs <- seg_data[chr == as.character(chr)]
+  if (nrow(chr_segs) == 0) return(NA)
+  
+  if (!is.null(arm)) {
+    chr_mid <- max(chr_segs$end) / 2
+    if (arm == "p") {
+      chr_segs <- chr_segs[end < chr_mid]
+    } else if (arm == "q") {
+      chr_segs <- chr_segs[start > chr_mid]
+    }
+  }
+  
+  if (nrow(chr_segs) == 0) return(NA)
+  median(chr_segs$copy.number, na.rm = TRUE)
+}
+
+# Monosomy 6 (WNT diagnostic feature)
+# Escudero 2020: 100% of WNT cases
+check_monosomy_6 <- function() {
+  chr6_cn <- get_chr_cn(6)
+  if (is.na(chr6_cn)) return(FALSE)
+  chr6_cn < 1.5  # Monosomy = 1 copy
+}
+
+# 9q loss (SHH characteristic)
+# Escudero 2020: 100% of SHH cases
+check_chr9q_loss <- function() {
+  chr9q_cn <- get_chr_cn(9, arm = "q")
+  if (is.na(chr9q_cn)) return(FALSE)
+  chr9q_cn < 1.5
+}
+
+# Isochromosome 17q (Group 3/4)
+# Schwalbe 2017: 42% Group 3, 67% Group 4
+check_iso17q <- function() {
+  chr17p_cn <- get_chr_cn(17, arm = "p")
+  chr17q_cn <- get_chr_cn(17, arm = "q")
+  
+  if (is.na(chr17p_cn) || is.na(chr17q_cn)) return(FALSE)
+  
+  # i17q = loss of 17p + gain of 17q
+  (chr17p_cn < 1.5) && (chr17q_cn > 2.5)
+}
+
+# MYC amplification (Group 3 specific)
+# Schwalbe 2017: 17% of Group 3
+check_myc_amplification <- function() {
+  # MYC at chr8:q24 (approximately 128-129 Mb)
+  chr8q_segs <- seg_data[chr == "8" & start > 100000000]
+  if (nrow(chr8q_segs) == 0) return(FALSE)
+  
+  max_cn_8q <- max(chr8q_segs$copy.number, na.rm = TRUE)
+  max_cn_8q > 4  # Amplification = 4+ copies
+}
+
+# MYCN amplification (SHH/Group 4)
+check_mycn_amplification <- function() {
+  # MYCN at chr2:p24.3
+  chr2p_segs <- seg_data[chr == "2" & start < 50000000]
+  if (nrow(chr2p_segs) == 0) return(FALSE)
+  
+  max_cn_2p <- max(chr2p_segs$copy.number, na.rm = TRUE)
+  max_cn_2p > 4
+}
+
+# Chr 8 loss (Group 4 characteristic)
+check_chr8_loss <- function() {
+  chr8_cn <- get_chr_cn(8)
+  if (is.na(chr8_cn)) return(FALSE)
+  chr8_cn < 1.5
+}
+
+# 10q loss (SHH)
+check_chr10q_loss <- function() {
+  chr10q_cn <- get_chr_cn(10, arm = "q")
+  if (is.na(chr10q_cn)) return(FALSE)
+  chr10q_cn < 1.5
+}
+
+# ==========================================
+# CLASSIFICATION LOGIC
+# Based on Liu et al. 2021 decision tree
+# ==========================================
+
+# Detect all features
+features <- list(
+  monosomy_6 = check_monosomy_6(),
+  chr9q_loss = check_chr9q_loss(),
+  chr10q_loss = check_chr10q_loss(),
+  iso17q = check_iso17q(),
+  myc_amp = check_myc_amplification(),
+  mycn_amp = check_mycn_amplification(),
+  chr8_loss = check_chr8_loss()
+)
+
+cat("Detected Features:\n")
+for (feature in names(features)) {
+  if (features[[feature]]) {
+    cat(sprintf("  ✓ %s\n", gsub("_", " ", feature)))
+  }
+}
+cat("\n")
+
+# Classification decision tree (Liu 2021 logic)
+
+if (features$monosomy_6) {
+  # Monosomy 6 is DIAGNOSTIC for WNT
+  # Escudero 2020: 100% specific
+  classification <- list(
+    subgroup = "WNT",
+    confidence = "High",
+    rationale = "Monosomy 6 detected (diagnostic for WNT-activated MB)",
+    key_features = "Monosomy 6"
+  )
+  
+} else if (features$myc_amp) {
+  # MYC amplification is SPECIFIC to Group 3
+  # Schwalbe 2017: 17% of Group 3, 0% of others
+  classification <- list(
+    subgroup = "Group 3",
+    confidence = "High",
+    rationale = "MYC amplification detected (specific to Group 3)",
+    key_features = "MYC amplification"
+  )
+  
+} else if (features$chr9q_loss || (features$chr9q_loss && features$chr10q_loss)) {
+  # 9q loss characteristic of SHH
+  # Escudero 2020: 100% of SHH in their cohort
+  classification <- list(
+    subgroup = "SHH",
+    confidence = "High",
+    rationale = "9q loss detected (characteristic of SHH-activated MB)",
+    key_features = "9q deletion"
+  )
+  
+} else if (features$iso17q && features$chr8_loss) {
+  # i17q + chr8 loss suggests Group 4
+  # Schwalbe 2017: Chr 8 loss in 20% of Group 4
+  classification <- list(
+    subgroup = "Group 4",
+    confidence = "High",
+    rationale = "Isochromosome 17q + chromosome 8 loss (characteristic of Group 4)",
+    key_features = "i17q, chr8 loss"
+  )
+  
+} else if (features$iso17q && !features$chr8_loss) {
+  # i17q alone - could be Group 3 or Group 4
+  # Schwalbe 2017: 42% Group 3, 67% Group 4
+  classification <- list(
+    subgroup = "Group 3 or Group 4",
+    confidence = "Medium",
+    rationale = "Isochromosome 17q present but cannot distinguish between Group 3 and Group 4",
+    key_features = "i17q"
+  )
+  
+} else if (features$mycn_amp) {
+  # MYCN amplification - SHH or Group 4
+  # Schwalbe 2017: 7% SHH, 4% Group 4
+  classification <- list(
+    subgroup = "SHH or Group 4",
+    confidence = "Medium",
+    rationale = "MYCN amplification detected",
+    key_features = "MYCN amplification"
+  )
+  
+} else {
+  # No diagnostic features
+  classification <- list(
+    subgroup = "Unclassified",
+    confidence = "Low",
+    rationale = "No diagnostic CNV pattern detected. May represent low tumor fraction or non-MB tumor.",
+    key_features = "None"
+  )
+}
+
+# Print results
+cat("=== CLASSIFICATION RESULT ===\n")
+cat("MB Subgroup:", classification$subgroup, "\n")
+cat("Confidence:", classification$confidence, "\n")
+cat("Rationale:", classification$rationale, "\n")
+cat("Key Features:", classification$key_features, "\n")
+
+# Save results
+output_data <- data.frame(
+  Sample_ID = opt$id,
+  Tumor_Fraction = tumor_fraction,
+  Ploidy = ploidy,
+  MB_Subgroup = classification$subgroup,
+  Confidence = classification$confidence,
+  Rationale = classification$rationale,
+  Monosomy_6 = features$monosomy_6,
+  Chr9q_Loss = features$chr9q_loss,
+  Iso17q = features$iso17q,
+  MYC_amp = features$myc_amp,
+  MYCN_amp = features$mycn_amp,
+  Chr8_loss = features$chr8_loss,
+  Timestamp = Sys.time()
+)
+
+fwrite(output_data, file.path(opt$output, paste0(opt$id, "_classification.csv")))
+
+cat("\n✓ Classification complete\n")# Based on CNV signatures from published papers
 # ============================================
 
 classify_medulloblastoma <- function(seg_data, config, ploidy) {
