@@ -1,40 +1,138 @@
 #!/bin/bash
-# FIXED Installation for MB Classification Pipeline (macOS compatible)
-# Based on Liu 2021, Markowitz 2025, Escudero 2020
+# Simplified MB Pipeline Installation for macOS
+# Avoids conda version conflicts
 
-echo "=== Installing MB Classification Pipeline (macOS) ==="
+set -e
 
-# Initialize conda if needed
+echo "======================================"
+echo "MB Pipeline Installer for macOS"
+echo "======================================"
+
+# Check if conda is available
 if ! command -v conda &> /dev/null; then
-    echo "ERROR: Conda not found. Please install Miniconda or Anaconda first."
-    echo "Download from: https://docs.conda.io/en/latest/miniconda.html"
+    echo "ERROR: Conda not found!"
+    echo "Install from: https://docs.conda.io/en/latest/miniconda.html"
     exit 1
 fi
 
-# Initialize conda for bash (if not already done)
-conda init bash
-source ~/.bash_profile 2>/dev/null || source ~/.bashrc 2>/dev/null
+# Step 1: Initialize conda
+echo ""
+echo "[Step 1/7] Initializing conda..."
+conda init bash 2>/dev/null || true
+source ~/.bash_profile 2>/dev/null || source ~/.bashrc 2>/dev/null || true
 
-# Remove existing environment if it exists
+# Step 2: Remove old environment
+echo ""
+echo "[Step 2/7] Removing old environment (if exists)..."
+conda deactivate 2>/dev/null || true
 conda env remove -n mb_classifier -y 2>/dev/null || true
 
-# Create fresh environment with FLEXIBLE versioning (macOS compatible)
-echo "Creating conda environment..."
-conda create -n mb_classifier -y \
-  python=3.9 \
-  -c conda-forge
+# Step 3: Create minimal environment
+echo ""
+echo "[Step 3/7] Creating minimal Python environment..."
+conda create -n mb_classifier -y python=3.9 -c conda-forge
 
-# Activate environment
+# Step 4: Activate and install core tools
+echo ""
+echo "[Step 4/7] Installing bioinformatics tools..."
+
+# Activate environment properly
 eval "$(conda shell.bash hook)"
 conda activate mb_classifier
 
-# Install R separately (macOS compatible)
-echo "Installing R..."
-conda install -y -c conda-forge r-base=4.3
+# Install tools ONE BY ONE to avoid conflicts
+echo "Installing BWA..."
+conda install -y -c bioconda bwa || echo "BWA install failed, will try alternative"
 
-# Install bioinformatics tools (with flexible versions for macOS)
-echo "Installing bioinformatics tools..."
-conda install -y -c bioconda -c conda-forge \
+echo "Installing SAMtools..."
+conda install -y -c bioconda samtools || echo "SAMtools install failed"
+
+echo "Installing FastQC..."
+conda install -y -c bioconda fastqc || echo "FastQC install failed"
+
+echo "Installing BEDtools..."
+conda install -y -c bioconda bedtools || echo "BEDtools install failed"
+
+# Step 5: Install R
+echo ""
+echo "[Step 5/7] Installing R..."
+conda install -y -c conda-forge r-base || {
+    echo "WARNING: R installation via conda failed"
+    echo "You may need to install R manually from: https://cran.r-project.org/bin/macosx/"
+}
+
+# Step 6: Install Python packages
+echo ""
+echo "[Step 6/7] Installing Python packages..."
+pip install --quiet --no-cache-dir \
+    pandas \
+    numpy \
+    scikit-learn \
+    matplotlib \
+    seaborn \
+    pyyaml
+
+# Step 7: Install R packages
+echo ""
+echo "[Step 7/7] Installing R packages..."
+
+Rscript - <<'EOF'
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Function to install with error handling
+safe_install <- function(pkg) {
+  tryCatch({
+    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+      install.packages(pkg, quiet = TRUE)
+    }
+    cat(sprintf("✓ %s installed\n", pkg))
+  }, error = function(e) {
+    cat(sprintf("✗ %s failed: %s\n", pkg, e$message))
+  })
+}
+
+# Core packages
+packages <- c(
+  "optparse", "data.table", "ggplot2", "dplyr",
+  "reshape2", "RColorBrewer", "scales",
+  "knitr", "rmarkdown", "gridExtra", "yaml"
+)
+
+cat("\nInstalling R packages...\n")
+for (pkg in packages) {
+  safe_install(pkg)
+}
+
+# Bioconductor
+cat("\nInstalling Bioconductor packages...\n")
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager", quiet = TRUE)
+}
+
+BiocManager::install(c("GenomeInfoDb", "GenomicRanges"), 
+                     update = FALSE, ask = FALSE, quiet = TRUE)
+
+cat("\n✓ R package installation complete!\n")
+EOF
+
+echo ""
+echo "======================================"
+echo "Installation Complete!"
+echo "======================================"
+echo ""
+echo "Next steps:"
+echo ""
+echo "1. Activate the environment:"
+echo "   conda activate mb_classifier"
+echo ""
+echo "2. Test the installation:"
+echo "   bwa"
+echo "   samtools"
+echo "   Rscript -e 'library(data.table)'"
+echo ""
+echo "3. Install ichorCNA (run separately):"
+echo "   bash install_ichorcna.sh"
+echo ""conda install -y -c bioconda -c conda-forge \
   bwa \
   samtools \
   fastqc \
