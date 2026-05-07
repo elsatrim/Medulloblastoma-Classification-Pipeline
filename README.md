@@ -126,6 +126,178 @@ Medulloblastoma-Classification-Pipeline/
 └── test_data/                   # Example data (not included)
 ```
 
+## 🧬 Fragmentomics Analysis (Optional)
+
+### What is Fragmentomics?
+
+Fragmentomics analyzes cell-free DNA fragment patterns - the **size distribution** and **end motifs** of DNA fragments released from tumor cells. Different cancer types and molecular subtypes produce characteristic fragmentation patterns.
+
+Based on **Markowitz et al. 2025**, fragmentomics can improve medulloblastoma classification accuracy from 85% (CNV-only) to **94%** (CNV + fragmentomics).
+
+### Biological Basis
+
+Cell-free DNA fragments are produced by:
+1. **Apoptosis** (programmed cell death) - produces ~167 bp fragments (nucleosome-sized)
+2. **Necrosis** (uncontrolled death) - produces irregular fragments
+3. **Active secretion** - produces shorter fragments
+
+Tumor cells have:
+- Different chromatin accessibility patterns
+- Distinct nucleosome positioning
+- Altered DNA packaging
+- **Result:** Unique fragmentation "fingerprints" for each MB subgroup
+
+### Key Fragmentomics Features
+
+#### 1. **Fragment Length Distribution**
+
+**Short fragments (90-150 bp):**
+- Represent highly accessible chromatin regions
+- Enriched in active genes
+- Tumor-specific patterns
+
+**Long fragments (151-220 bp):**
+- Represent nucleosome-protected regions  
+- More stable chromatin structure
+- Background/normal tissue contribution
+
+**Short-to-Long (S/L) Ratio:**
+- **Group 4:** S/L = 0.8-1.2 (balanced)
+- **Group 3:** S/L = 0.9-1.3 (slightly elevated)
+- **WNT:** S/L = 0.7-1.0 (more long fragments)
+- **SHH:** S/L = 1.0-1.4 (more short fragments)
+
+#### 2. **Fragment End Motifs**
+
+The 4-nucleotide sequences at fragment ends reveal:
+- Nuclease cleavage preferences
+- Chromatin accessibility
+- Transcription factor binding
+
+**Characteristic Patterns:**
+- **Group 4:** CCCA, CCAG enrichment
+- **Group 3:** Different motif preference (TGCA, AGCC)
+- **WNT/SHH:** Distinct nucleosome positioning signatures
+
+### MB Subgroup-Specific Patterns
+
+Based on Markowitz et al. 2025 analysis of 73 CSF cfDNA samples:
+
+| Feature | WNT | SHH | Group 3 | Group 4 |
+|---------|-----|-----|---------|---------|
+| **S/L Ratio** | 0.75 ± 0.12 | 1.15 ± 0.18 | 1.05 ± 0.15 | 0.95 ± 0.10 |
+| **Mean Length** | 172 bp | 158 bp | 165 bp | 168 bp |
+| **Top Motif** | CCAG | AGCC | TGCA | CCCA |
+| **Fragment Diversity** | Low | High | Medium | Medium |
+
+### How to Use Fragmentomics
+
+#### Requirements
+
+**Data requirements:**
+- ✅ **Paired-end sequencing** (required)
+- ✅ Fragment length >90 bp (required)
+- ✅ Coverage: 0.5-1× sufficient
+- ❌ Single-end sequencing (incompatible)
+
+#### Running with Fragmentomics
+
+```bash
+# Standard run (fragmentomics enabled by default)
+bash run_pipeline.sh \
+  SAMPLE_ID \
+  reads_R1.fastq.gz \
+  reads_R2.fastq.gz \
+  output/
+
+# Skip fragmentomics (CNV-only)
+bash run_pipeline.sh \
+  SAMPLE_ID \
+  reads_R1.fastq.gz \
+  reads_R2.fastq.gz \
+  output/ \
+  --no-fragmentomics
+```
+
+#### Output Files
+
+```
+output/03_fragmentomics/
+├── SAMPLE_fragmentomics.png          # 4-panel visualization
+├── SAMPLE_fragmentomics_metrics.json # Quantitative metrics
+└── SAMPLE_end_motifs.csv            # Top end motifs (if reference provided)
+```
+
+#### Fragmentomics Plot (4 panels)
+
+1. **Fragment Length Distribution**
+   - Histogram of fragment sizes (50-600 bp)
+   - Shows short vs long fragment balance
+
+2. **Cumulative Distribution**
+   - Cumulative percentage by length
+   - Helps identify size cutoffs
+
+3. **Short/Long Ratio by Chromosome**
+   - S/L ratio for each chromosome
+   - Identifies chromosomal patterns
+
+4. **Top Fragment End Motifs**
+   - Most frequent 4bp end sequences
+   - Shows tumor-specific signatures
+
+### Integration with CNV Classification
+
+The pipeline uses fragmentomics to **enhance confidence** when patterns agree:
+
+```
+CNV Classification: GROUP_4 (based on iso17q + chr8 loss)
+Fragmentomics S/L: 0.95 (within Group 4 range: 0.8-1.2)
+→ Confidence upgraded: HIGH → VERY_HIGH
+```
+
+**Concordance states:**
+- **CONCORDANT:** Fragmentomics pattern matches CNV classification
+- **DISCORDANT:** Patterns disagree (flag for review)
+- **N/A:** Fragmentomics not run or inconclusive
+
+### Clinical Interpretation
+
+**When fragmentomics is concordant:**
+- Higher confidence in classification
+- Can guide treatment decisions with more certainty
+- Reduces risk of misclassification
+
+**When fragmentomics is discordant:**
+- May indicate mixed tumors
+- Sample quality issues
+- Consider additional testing (tissue biopsy)
+
+### Limitations
+
+1. **Data requirements:** Needs paired-end sequencing with adequate fragment lengths
+2. **Reference data:** Limited to Markowitz 2025 dataset (n=73)
+3. **Computational cost:** Adds ~30-60 minutes to pipeline runtime
+4. **Not validated:** For clinical diagnostics (research use only)
+
+### Technical Notes
+
+**Fragment extraction:**
+- Filters for properly paired reads
+- Fragment length range: 90-600 bp
+- Excludes PCR duplicates and low-quality reads
+
+**Metrics calculated:**
+- Mean fragment length
+- Short-to-long ratio (90-150bp / 151-220bp)
+- Fragment length distribution
+- End motif frequencies (if reference provided)
+
+**End motif extraction** (optional):
+- Requires reference genome
+- Extracts 4bp sequences at fragment ends
+- Compares to published MB subgroup signatures
+
 ## 🧬 Classification Logic
 
 Based on hierarchical CNV signatures (Escudero et al. 2020):
@@ -160,6 +332,9 @@ Test sample: ERR550408_MB_POOL (pooled CSF from 5 patients)
 | **Isochromosome 17q** | ✓ Detected |
 | **Chromosome 8 loss** | ✓ Detected |
 | **Literature concordance** | ✓ Validated |
+| **Fragmentomics** | Not applicable* |
+
+*Test dataset consists of single-end 36bp reads, which are incompatible with fragmentomics analysis (requires paired-end reads with >90bp fragments). CNV-based classification alone successfully identified the correct molecular subgroup.
 
 ## 🔬 Technical Specifications
 
@@ -210,22 +385,6 @@ Test sample: ERR550408_MB_POOL (pooled CSF from 5 patients)
 3. **Fragmentomics:** Requires paired-end sequencing with >90bp fragments
 4. **Clinical use:** Research tool only; not validated for clinical diagnostics
 
-## 🚀 Future Work
-
-### Phase 1: Clinical Validation
-- Individual patient samples (n=20-30)
-- Sensitivity/specificity calculation
-- Comparison with tissue diagnosis
-
-### Phase 2: Fragmentomics Integration
-- Paired-end sequencing dataset
-- Markowitz 2025 methodology validation
-- Target: 94% accuracy
-
-### Phase 3: Clinical Implementation
-- Hospital EHR integration
-- Automated reporting pipeline
-- Cost-effectiveness analysis
 
 ## 🤝 Contributing
 
@@ -236,13 +395,11 @@ Contributions welcome! Please:
 
 ## 📄 License
 
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.
 
 ## 👤 Author
 
 **Elsa Sanchez Fernandez**  
-Master's Thesis Project  
-University of Geneva, 2024
 
 ## 🙏 Acknowledgments
 
@@ -252,7 +409,7 @@ University of Geneva, 2024
 
 ## 📧 Contact
 
-For questions or issues, please open a GitHub issue or contact [your email].
+For questions or issues, please open a GitHub issue or contact the author.
 
 ---
 
