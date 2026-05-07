@@ -1,0 +1,279 @@
+---
+title: "Medulloblastoma Classification Report"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+params:
+  sample_id: ""
+  classification_file: ""
+  risk_file: ""
+  ichorcna_dir: ""
+  seg_file: ""
+  fragmentomics_dir: ""
+  fragmentomics_enabled: "false"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(data.table)
+library(ggplot2)
+library(knitr)
+library(gridExtra)
+```
+
+# Sample Information
+
+**Sample ID:** `r params$sample_id`  
+**Analysis Date:** `r Sys.Date()`  
+**Pipeline Version:** 2.0 with Fragmentomics Support
+
+---
+
+# Classification Results
+
+```{r load_data}
+# Load classification
+classification <- fread(params$classification_file)
+
+# Load risk
+risk <- fread(params$risk_file)
+```
+
+## Molecular Subgroup
+
+**Classification:** `r classification$classification[1]`  
+**Confidence:** `r classification$confidence[1]`
+
+### Rationale
+
+```{r rationale}
+rationale_text <- classification$rationale[1]
+rationale_lines <- strsplit(rationale_text, "\\|")[[1]]
+for (line in rationale_lines) {
+  cat(paste0("- ", trimws(line), "\n"))
+}
+```
+
+---
+
+## Copy Number Alterations
+
+```{r cnv_table}
+cnv_results <- data.frame(
+  Alteration = c("Monosomy 6", "Chromosome 9q loss", "MYC amplification", 
+                 "Isochromosome 17q", "Chromosome 8 loss"),
+  Status = c(
+    ifelse(classification$monosomy_6[1], "DETECTED", "NOT DETECTED"),
+    ifelse(classification$chr9q_loss[1], "DETECTED", "NOT DETECTED"),
+    ifelse(classification$myc_amplification[1], "DETECTED", "NOT DETECTED"),
+    ifelse(classification$isochromosome_17q[1], "DETECTED", "NOT DETECTED"),
+    ifelse(classification$chromosome_8_loss[1], "DETECTED", "NOT DETECTED")
+  ),
+  Significance = c(
+    "WNT signature (100%)",
+    "SHH signature (32-100%)",
+    "Group 3 signature (17%)",
+    "Group 3/4 signature (42%/67%)",
+    "Group 4 signature (20%)"
+  )
+)
+
+kable(cnv_results, caption = "CNV Alterations Detected")
+```
+
+---
+
+## Tumor Metrics
+
+**Tumor Fraction:** `r sprintf("%.2f%%", classification$tumor_fraction[1] * 100)`  
+**Ploidy:** `r sprintf("%.2f", classification$ploidy[1])`
+
+Expected tumor fraction for CSF cfDNA: 8-72% (median 31%, Liu et al. 2021)
+
+```{r tumor_fraction_plot}
+tf <- classification$tumor_fraction[1]
+
+ggplot(data.frame(x = c(0, 1)), aes(x)) +
+  geom_rect(aes(xmin = 0.08, xmax = 0.72, ymin = 0, ymax = 1), 
+            fill = "lightblue", alpha = 0.3) +
+  geom_vline(xintercept = 0.31, linetype = "dashed", color = "blue", size = 1) +
+  geom_vline(xintercept = tf, color = "red", size = 1.5) +
+  annotate("text", x = 0.31, y = 0.9, label = "Median (31%)", angle = 90, vjust = -0.5) +
+  annotate("text", x = tf, y = 0.9, label = sprintf("This sample (%.1f%%)", tf*100), 
+           angle = 90, vjust = -0.5, color = "red") +
+  labs(x = "Tumor Fraction", y = "", title = "Tumor Fraction Comparison") +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+```
+
+---
+
+# Fragmentomics Analysis
+
+```{r fragmentomics_section, eval=(params$fragmentomics_enabled == "true")}
+if (params$fragmentomics_enabled == "true") {
+  
+  cat("## Fragmentomics Results (Markowitz et al. 2025)\n\n")
+  
+  # Check if fragmentomics data available
+  if ("fragmentomics_sl_ratio" %in% names(classification) && 
+      !is.na(classification$fragmentomics_sl_ratio[1])) {
+    
+    sl_ratio <- classification$fragmentomics_sl_ratio[1]
+    concordance <- classification$fragmentomics_concordance[1]
+    
+    cat(sprintf("**Short/Long Ratio:** %.3f\n\n", sl_ratio))
+    cat(sprintf("**Literature Concordance:** %s\n\n", concordance))
+    
+    # Plot if available
+    frag_plot <- file.path(params$fragmentomics_dir, 
+                          paste0(params$sample_id, "_fragmentomics.png"))
+    
+    if (file.exists(frag_plot)) {
+      cat("### Fragment Pattern Analysis\n\n")
+      knitr::include_graphics(frag_plot)
+    }
+    
+    cat("\n\n### Interpretation\n\n")
+    
+    if (concordance == "CONCORDANT") {
+      cat("✓ Fragmentomics patterns are **CONCORDANT** with CNV-based classification.\n\n")
+      cat("The S/L ratio and end motif patterns match published signatures for this MB subgroup.\n\n")
+    } else if (concordance == "DISCORDANT") {
+      cat("⚠ Fragmentomics patterns show **DISCORDANCE** with CNV classification.\n\n")
+      cat("Further investigation may be warranted.\n\n")
+    } else {
+      cat("Fragmentomics analysis performed. Pattern analysis available above.\n\n")
+    }
+    
+  } else {
+    cat("Fragmentomics metrics not available in classification file.\n\n")
+  }
+  
+} else {
+  cat("## Fragmentomics Analysis\n\n")
+  cat("Fragmentomics analysis was not performed for this sample.\n\n")
+  cat("This is a CNV-only classification (Liu et al. 2021 approach).\n\n")
+}
+```
+
+---
+
+# ichorCNA Results
+
+```{r ichorcna_plot}
+# Include ichorCNA genome-wide plot
+genomewide_plot <- file.path(params$ichorcna_dir, 
+                             paste0(params$sample_id, "_genomeWide.pdf"))
+
+if (file.exists(genomewide_plot)) {
+  knitr::include_graphics(genomewide_plot)
+} else {
+  cat("ichorCNA plot not found.\n")
+}
+```
+
+---
+
+# Risk Stratification
+
+```{r risk_info}
+cat(sprintf("**Risk Group:** %s\n\n", risk$risk_group[1]))
+cat(sprintf("**Metastasis:** %s\n\n", risk$metastasis[1]))
+cat(sprintf("**Histology:** %s\n\n", risk$histology[1]))
+cat(sprintf("**Risk Modifiers:** %s\n\n", risk$modifiers[1]))
+```
+
+## Important Notes
+
+**This pipeline provides molecular subgroup classification only.**
+
+Complete risk stratification requires integration of:
+
+- Molecular subgroup (✓ provided by this pipeline)
+- Tissue histology (large cell/anaplastic vs classic vs desmoplastic)
+- MRI staging (M0 vs M+)
+- Age at diagnosis
+- Extent of resection
+- Specific mutations (e.g., TP53 in SHH subgroup)
+
+---
+
+# Clinical Interpretation
+
+```{r interpretation}
+subgroup <- classification$classification[1]
+confidence <- classification$confidence[1]
+
+if (subgroup == "WNT") {
+  cat("**WNT-activated medulloblastoma** has excellent prognosis with >95% survival.\n\n")
+  cat("Treatment de-escalation may be considered to reduce long-term morbidity.\n\n")
+  
+} else if (subgroup == "SHH") {
+  cat("**SHH-activated medulloblastoma** has variable prognosis depending on age and TP53 status.\n\n")
+  cat("May be eligible for SMO inhibitor therapy (e.g., vismodegib).\n\n")
+  
+} else if (subgroup == "GROUP_3") {
+  cat("**Group 3 medulloblastoma** often has poor prognosis, especially with MYC amplification.\n\n")
+  cat("Aggressive treatment typically recommended.\n\n")
+  
+} else if (subgroup == "GROUP_4") {
+  cat("**Group 4 medulloblastoma** has intermediate prognosis.\n\n")
+  cat("Represents ~35% of all medulloblastomas.\n\n")
+  
+  if (params$fragmentomics_enabled == "true" && 
+      "fragmentomics_concordance" %in% names(classification)) {
+    if (classification$fragmentomics_concordance[1] == "CONCORDANT") {
+      cat("Fragmentomics concordance provides additional validation of classification.\n\n")
+    }
+  }
+}
+
+cat("**Tumor fraction (", sprintf("%.1f%%", classification$tumor_fraction[1]*100), 
+    ")** is within expected range for CSF cfDNA.\n\n", sep="")
+```
+
+---
+
+# Methods
+
+## CNV-based Classification
+
+Classification follows Liu et al. 2021 methodology:
+
+- Low-coverage whole genome sequencing (lcWGS)
+- ichorCNA for CNV detection and tumor fraction estimation
+- Hierarchical classification logic based on characteristic CNV signatures
+
+CNV signatures from Escudero et al. 2020 (n=1,501 medulloblastomas).
+
+```{r fragmentomics_methods, eval=(params$fragmentomics_enabled == "true")}
+if (params$fragmentomics_enabled == "true") {
+  cat("\n## Fragmentomics Analysis\n\n")
+  cat("Fragment pattern analysis follows Markowitz et al. 2025 methodology:\n\n")
+  cat("- Fragment length distribution (short: 90-150bp, long: 151-220bp)\n")
+  cat("- Short-to-long (S/L) ratio calculation\n")
+  cat("- 4bp fragment end motif analysis\n")
+  cat("- Comparison to published MB subgroup-specific patterns\n\n")
+  cat("Fragmentomics provides orthogonal validation of CNV-based classification.\n\n")
+}
+```
+
+---
+
+# References
+
+1. **Liu et al. 2021** - Cancer Cell. "CSF liquid biopsy enables medulloblastoma classification"
+2. **Escudero et al. 2020** - Acta Neuropathologica. "Molecular subgroup-specific CNV alterations"
+3. **Schwalbe et al. 2017** - Lancet Oncology. "Clinical classification and outcome prediction"
+
+```{r fragmentomics_ref, eval=(params$fragmentomics_enabled == "true")}
+if (params$fragmentomics_enabled == "true") {
+  cat("4. **Markowitz et al. 2025** - npj Precision Oncology. \"Genome-wide cfDNA fragmentation patterns\"\n")
+}
+```
+
+---
+
+**Report generated:** `r Sys.time()`

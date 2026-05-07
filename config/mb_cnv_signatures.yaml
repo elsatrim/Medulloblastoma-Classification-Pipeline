@@ -1,0 +1,9 @@
+signatures:
+  GROUP_4:
+    iso17q:
+      frequency: 0.67
+    chr8_loss:
+      frequency: 0.20
+thresholds:
+  gain: 0.3
+  loss: -0.3

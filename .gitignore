@@ -1,0 +1,43 @@
+# Output directories (results are user-specific)
+output/
+results/
+*.log
+
+# Temporary files
+setup_config.sh
+fragmentomics_debug.log
+
+# Test data (too large for GitHub)
+test_data/
+
+# Conda environment
+.conda/
+*.pyc
+__pycache__/
+
+# macOS
+.DS_Store
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# BAM files and indices (too large)
+*.bam
+*.bam.bai
+*.bai
+
+# Large reference files
+*.fa
+*.fa.fai
+*.fasta
+*.fasta.fai
+
+# Compressed files
+*.gz
+*.zip
+*.tar
+*.tar.gz
